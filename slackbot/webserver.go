@@ -17,10 +17,12 @@ limitations under the License.
 package main
 
 import (
+	//"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
 	"k8s.io/kubernetes/pkg/client/restclient"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
@@ -34,8 +36,39 @@ type Server struct {
 
 // serveStatus returns "pass", "running", or "fail".
 func (s *Server) serveScale(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("Got request: %#v", r)
-	fmt.Fprintf(w, "not implemented yet")
+	log.Printf("Got request: %#v\n", r)
+	// command := r.URL.Query().Get("command")
+	r.ParseForm()
+	switch r.FormValue("command") {
+	case "/scale":
+		scaleString := r.FormValue("text")
+		scale, err := strconv.Atoi(scaleString)
+		if err != nil {
+			fmt.Fprintf(w, "couldn't parse %q: %v", scaleString, err)
+			return
+		}
+		d, err := s.client.Extensions().Deployments("default").Get("slackscale")
+		if err != nil {
+			fmt.Fprintf(w, "couldn't get deployment: %v", err)
+			return
+		}
+		d.Spec.Replicas = int32(scale)
+		_, err = s.client.Extensions().Deployments("default").Update(d)
+		if err != nil {
+			fmt.Fprintf(w, "couldn't write deployment: %v", err)
+			return
+		}
+		fmt.Fprintf(w, "scaled to %v", scale)
+	case "/getscale":
+		d, err := s.client.Extensions().Deployments("default").Get("slackscale")
+		if err != nil {
+			fmt.Fprintf(w, "couldn't get deployment: %v", err)
+			return
+		}
+		fmt.Fprintf(w, "Currently there are %v replicas available. (%v unavailable)", d.Status.AvailableReplicas, d.Status.UnavailableReplicas)
+	default:
+		fmt.Fprintf(w, "don't know command %v", r.FormValue("command"))
+	}
 }
 
 func main() {
