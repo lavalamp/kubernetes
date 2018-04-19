@@ -116,21 +116,24 @@ func PatchResource(r rest.Patcher, scope RequestScope, admit admission.Interface
 		}
 
 		p := patcher{
-			codec:           codec,
 			namer:           scope.Namer,
 			creater:         scope.Creater,
 			defaulter:       scope.Defaulter,
 			unsafeConvertor: scope.UnsafeConvertor,
 			kind:            scope.Kind,
 			resource:        scope.Resource,
+
+			createValidation: rest.AdmissionToValidateObjectFunc(admit, staticAdmissionAttributes),
+			updateValidation: rest.AdmissionToValidateObjectUpdateFunc(admit, staticAdmissionAttributes),
+
+			codec:           codec,
+
 			trace:           trace,
 		}
 
 		result, err := p.patchResource(
 			ctx,
 			updateMutation,
-			rest.AdmissionToValidateObjectFunc(admit, staticAdmissionAttributes),
-			rest.AdmissionToValidateObjectUpdateFunc(admit, staticAdmissionAttributes),
 			timeout, versionedObj,
 			r,
 			name,
@@ -161,7 +164,6 @@ func PatchResource(r rest.Patcher, scope RequestScope, admit admission.Interface
 type mutateObjectUpdateFunc func(obj, old runtime.Object) error
 
 type patcher struct {
-
 	// Pieces of RequestScope
 	namer           ScopeNamer
 	creater         runtime.ObjectCreater
@@ -169,6 +171,10 @@ type patcher struct {
 	unsafeConvertor runtime.ObjectConvertor
 	resource        schema.GroupVersionResource
 	kind            schema.GroupVersionKind
+
+	// Validation functions
+	createValidation rest.ValidateObjectFunc
+	updateValidation rest.ValidateObjectUpdateFunc
 
 	codec runtime.Codec
 
@@ -179,8 +185,6 @@ type patcher struct {
 func (p *patcher) patchResource(
 	ctx request.Context,
 	updateMutation mutateObjectUpdateFunc,
-	createValidation rest.ValidateObjectFunc,
-	updateValidation rest.ValidateObjectUpdateFunc,
 	timeout time.Duration,
 	versionedObj runtime.Object,
 	patcher rest.Patcher,
@@ -398,10 +402,10 @@ func (p *patcher) patchResource(
 	updatedObjectInfo := rest.DefaultUpdatedObjectInfo(nil, applyPatch, applyAdmission)
 
 	return finishRequest(timeout, func() (runtime.Object, error) {
-		updateObject, _, updateErr := patcher.Update(ctx, name, updatedObjectInfo, createValidation, updateValidation)
+		updateObject, _, updateErr := patcher.Update(ctx, name, updatedObjectInfo, p.createValidation, p.updateValidation)
 		for i := 0; i < MaxRetryWhenPatchConflicts && (errors.IsConflict(updateErr)); i++ {
 			lastConflictErr = updateErr
-			updateObject, _, updateErr = patcher.Update(ctx, name, updatedObjectInfo, createValidation, updateValidation)
+			updateObject, _, updateErr = patcher.Update(ctx, name, updatedObjectInfo, p.createValidation, p.updateValidation)
 		}
 		return updateObject, updateErr
 	})

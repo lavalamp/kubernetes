@@ -338,21 +338,23 @@ func (tc *patchTestCase) Run(t *testing.T) {
 		}
 
 		p := patcher{
-			codec:           codec,
 			namer:           namer,
 			creater:         creater,
 			defaulter:       defaulter,
 			unsafeConvertor: convertor,
 			kind:            kind,
 			resource:        resource,
+
+			createValidation: rest.ValidateAllObjectFunc,
+			updateValidation: admissionValidation,
+
+			codec:           codec,
 			trace:           utiltrace.New("Patch" + name),
 		}
 
 		resultObj, err := p.patchResource(
 			ctx,
 			admissionMutation,
-			rest.ValidateAllObjectFunc,
-			admissionValidation,
 			1*time.Second,
 			versionedObj,
 			testPatcher,
