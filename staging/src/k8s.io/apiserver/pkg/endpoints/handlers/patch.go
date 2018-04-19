@@ -196,6 +196,7 @@ type patcher struct {
 
 	// Set at construction time and immutable
 	namespace string
+	updatedObjectInfo rest.UpdatedObjectInfo
 
 	// These variables are set and mutated post construction
 	// TODO: split into separate object or otherwise make that not true
@@ -396,26 +397,31 @@ func (p *patcher) applyPatch(_ request.Context, _, currentObject runtime.Object)
 	}
 }
 
+// applyAdmission is called every time GuaranteedUpdate asks for the updated object,
+// and is given the currently persisted object and the patched object as input.
+func (p *patcher) applyAdmission(ctx request.Context, patchedObject runtime.Object, currentObject runtime.Object) (runtime.Object, error) {
+	p.trace.Step("About to check admission control")
+	return patchedObject, p.admissionCheck(patchedObject, currentObject)
+}
+
+func (p *patcher) requestLoop(ctx request.Context) func() (runtime.Object, error) {
+	// return a function to catch ctx in a closure, until finishRequest
+	// starts handling the context.
+	return func() (runtime.Object, error) {
+		updateObject, _, updateErr := p.patcher.Update(ctx, p.name, p.updatedObjectInfo, p.createValidation, p.updateValidation)
+		for i := 0; i < MaxRetryWhenPatchConflicts && (errors.IsConflict(updateErr)); i++ {
+			p.lastConflictErr = updateErr
+			updateObject, _, updateErr = p.patcher.Update(ctx, p.name, p.updatedObjectInfo, p.createValidation, p.updateValidation)
+		}
+		return updateObject, updateErr
+	}
+}
+
 // patchResource divides PatchResource for easier unit testing
 func (p *patcher) patchResource(ctx request.Context) (runtime.Object, error) {
 	p.namespace = request.NamespaceValue(ctx)
-
-	// applyAdmission is called every time GuaranteedUpdate asks for the updated object,
-	// and is given the currently persisted object and the patched object as input.
-	applyAdmission := func(ctx request.Context, patchedObject runtime.Object, currentObject runtime.Object) (runtime.Object, error) {
-		p.trace.Step("About to check admission control")
-		return patchedObject, p.admissionCheck(patchedObject, currentObject)
-	}
-	updatedObjectInfo := rest.DefaultUpdatedObjectInfo(nil, p.applyPatch, applyAdmission)
-
-	return finishRequest(p.timeout, func() (runtime.Object, error) {
-		updateObject, _, updateErr := p.patcher.Update(ctx, p.name, updatedObjectInfo, p.createValidation, p.updateValidation)
-		for i := 0; i < MaxRetryWhenPatchConflicts && (errors.IsConflict(updateErr)); i++ {
-			p.lastConflictErr = updateErr
-			updateObject, _, updateErr = p.patcher.Update(ctx, p.name, updatedObjectInfo, p.createValidation, p.updateValidation)
-		}
-		return updateObject, updateErr
-	})
+	p.updatedObjectInfo = rest.DefaultUpdatedObjectInfo(nil, p.applyPatch, p.applyAdmission)
+	return finishRequest(p.timeout, p.requestLoop(ctx))
 }
 
 // patchObjectJSON patches the <originalObject> with <patchJS> and stores
