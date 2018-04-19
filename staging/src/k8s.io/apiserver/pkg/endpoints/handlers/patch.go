@@ -126,15 +126,17 @@ func PatchResource(r rest.Patcher, scope RequestScope, admit admission.Interface
 			createValidation: rest.AdmissionToValidateObjectFunc(admit, staticAdmissionAttributes),
 			updateValidation: rest.AdmissionToValidateObjectUpdateFunc(admit, staticAdmissionAttributes),
 
-			codec:           codec,
+			codec: codec,
 
-			trace:           trace,
+			timeout: timeout,
+
+			trace: trace,
 		}
 
 		result, err := p.patchResource(
 			ctx,
 			updateMutation,
-			timeout, versionedObj,
+			versionedObj,
 			r,
 			name,
 			patchType,
@@ -178,6 +180,8 @@ type patcher struct {
 
 	codec runtime.Codec
 
+	timeout time.Duration
+
 	trace *utiltrace.Trace
 }
 
@@ -185,7 +189,6 @@ type patcher struct {
 func (p *patcher) patchResource(
 	ctx request.Context,
 	updateMutation mutateObjectUpdateFunc,
-	timeout time.Duration,
 	versionedObj runtime.Object,
 	patcher rest.Patcher,
 	name string,
@@ -401,7 +404,7 @@ func (p *patcher) patchResource(
 	}
 	updatedObjectInfo := rest.DefaultUpdatedObjectInfo(nil, applyPatch, applyAdmission)
 
-	return finishRequest(timeout, func() (runtime.Object, error) {
+	return finishRequest(p.timeout, func() (runtime.Object, error) {
 		updateObject, _, updateErr := patcher.Update(ctx, name, updatedObjectInfo, p.createValidation, p.updateValidation)
 		for i := 0; i < MaxRetryWhenPatchConflicts && (errors.IsConflict(updateErr)); i++ {
 			lastConflictErr = updateErr

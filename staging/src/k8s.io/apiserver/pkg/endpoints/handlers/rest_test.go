@@ -348,14 +348,16 @@ func (tc *patchTestCase) Run(t *testing.T) {
 			createValidation: rest.ValidateAllObjectFunc,
 			updateValidation: admissionValidation,
 
-			codec:           codec,
-			trace:           utiltrace.New("Patch" + name),
+			codec: codec,
+
+			timeout: 1 * time.Second,
+
+			trace: utiltrace.New("Patch" + name),
 		}
 
 		resultObj, err := p.patchResource(
 			ctx,
 			admissionMutation,
-			1*time.Second,
 			versionedObj,
 			testPatcher,
 			name,
