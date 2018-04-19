@@ -355,10 +355,10 @@ func (tc *patchTestCase) Run(t *testing.T) {
 
 			versionedObj: versionedObj,
 
-			restPatcher:   testPatcher,
-			name:      name,
-			patchType: patchType,
-			patchJS:   patch,
+			restPatcher: testPatcher,
+			name:        name,
+			patchType:   patchType,
+			patchJS:     patch,
 
 			trace: utiltrace.New("Patch" + name),
 		}

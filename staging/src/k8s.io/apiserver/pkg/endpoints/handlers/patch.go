@@ -133,10 +133,10 @@ func PatchResource(r rest.Patcher, scope RequestScope, admit admission.Interface
 
 			versionedObj: versionedObj,
 
-			restPatcher:   r,
-			name:      name,
-			patchType: patchType,
-			patchJS:   patchJS,
+			restPatcher: r,
+			name:        name,
+			patchType:   patchType,
+			patchJS:     patchJS,
 
 			trace: trace,
 		}
@@ -187,10 +187,10 @@ type patcher struct {
 	versionedObj runtime.Object
 
 	// Operation information
-	restPatcher   rest.Patcher
-	name      string
-	patchType types.PatchType
-	patchJS   []byte
+	restPatcher rest.Patcher
+	name        string
+	patchType   types.PatchType
+	patchJS     []byte
 
 	trace *utiltrace.Trace
 
@@ -200,8 +200,8 @@ type patcher struct {
 	mechanism         patchMechanism
 
 	// Modified each iteration
-	iterationCount int
-	lastConflictErr         error
+	iterationCount  int
+	lastConflictErr error
 
 	// Set on first iteration
 	originalResourceVersion string
@@ -215,18 +215,18 @@ type patchMechanism interface {
 type jsonPatcher struct {
 	*patcher
 
-	originalObjJS           []byte
-	originalPatchedObjJS    []byte
+	originalObjJS        []byte
+	originalPatchedObjJS []byte
 
-	getOriginalPatchMap     func() (map[string]interface{}, error)
+	getOriginalPatchMap func() (map[string]interface{}, error)
 }
 
 type smpPatcher struct {
 	*patcher
 
-	originalObjMap          map[string]interface{}
+	originalObjMap map[string]interface{}
 
-	getOriginalPatchMap     func() (map[string]interface{}, error)
+	getOriginalPatchMap func() (map[string]interface{}, error)
 }
 
 func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
@@ -259,58 +259,6 @@ func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentRes
 			return nil, errors.NewBadRequest(err.Error())
 		}
 		return originalPatchMap, nil
-	}
-
-	return objToUpdate, nil
-}
-
-func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
-	// first time through,
-	// 1. apply the patch
-	// 2. save the original and patched to detect whether there were conflicting changes on retries
-
-	objToUpdate := p.restPatcher.New()
-
-	// For performance reasons, in case of strategicpatch, we avoid json
-	// marshaling and unmarshaling and operate just on map[string]interface{}.
-	// In case of other patch types, we still have to operate on JSON
-	// representations.
-
-	// Since the patch is applied on versioned objects, we need to convert the
-	// current object to versioned representation first.
-	currentVersionedObject, err := p.unsafeConvertor.ConvertToVersion(currentObject, p.kind.GroupVersion())
-	if err != nil {
-		return nil, err
-	}
-	versionedObjToUpdate, err := p.creater.New(p.kind)
-	if err != nil {
-		return nil, err
-	}
-	// Capture the original object map and patch for possible retries.
-	originalMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(currentVersionedObject)
-	if err != nil {
-		return nil, err
-	}
-	if err := strategicPatchObject(p.codec, p.defaulter, currentVersionedObject, p.patchJS, versionedObjToUpdate, p.versionedObj); err != nil {
-		return nil, err
-	}
-	// Convert the object back to unversioned.
-	gvk := p.kind.GroupKind().WithVersion(runtime.APIVersionInternal)
-	unversionedObjToUpdate, err := p.unsafeConvertor.ConvertToVersion(versionedObjToUpdate, gvk.GroupVersion())
-	if err != nil {
-		return nil, err
-	}
-	objToUpdate = unversionedObjToUpdate
-	// Store unstructured representation for possible retries.
-	p.originalObjMap = originalMap
-	// Make a getter that can return a fresh strategic patch map if needed for conflict retries
-	// We have to rebuild it each time we need it, because the map gets mutated when being applied
-	p.getOriginalPatchMap = func() (map[string]interface{}, error) {
-		patchMap := make(map[string]interface{})
-		if err := json.Unmarshal(p.patchJS, &patchMap); err != nil {
-			return nil, errors.NewBadRequest(err.Error())
-		}
-		return patchMap, nil
 	}
 
 	return objToUpdate, nil
@@ -392,6 +340,58 @@ func (p *jsonPatcher) subsequentPatchAttempt(currentObject runtime.Object, curre
 	objToUpdate, err := p.unsafeConvertor.ConvertToVersion(versionedObjToUpdate, gvk.GroupVersion())
 	if err != nil {
 		return nil, err
+	}
+
+	return objToUpdate, nil
+}
+
+func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
+	// first time through,
+	// 1. apply the patch
+	// 2. save the original and patched to detect whether there were conflicting changes on retries
+
+	objToUpdate := p.restPatcher.New()
+
+	// For performance reasons, in case of strategicpatch, we avoid json
+	// marshaling and unmarshaling and operate just on map[string]interface{}.
+	// In case of other patch types, we still have to operate on JSON
+	// representations.
+
+	// Since the patch is applied on versioned objects, we need to convert the
+	// current object to versioned representation first.
+	currentVersionedObject, err := p.unsafeConvertor.ConvertToVersion(currentObject, p.kind.GroupVersion())
+	if err != nil {
+		return nil, err
+	}
+	versionedObjToUpdate, err := p.creater.New(p.kind)
+	if err != nil {
+		return nil, err
+	}
+	// Capture the original object map and patch for possible retries.
+	originalMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(currentVersionedObject)
+	if err != nil {
+		return nil, err
+	}
+	if err := strategicPatchObject(p.codec, p.defaulter, currentVersionedObject, p.patchJS, versionedObjToUpdate, p.versionedObj); err != nil {
+		return nil, err
+	}
+	// Convert the object back to unversioned.
+	gvk := p.kind.GroupKind().WithVersion(runtime.APIVersionInternal)
+	unversionedObjToUpdate, err := p.unsafeConvertor.ConvertToVersion(versionedObjToUpdate, gvk.GroupVersion())
+	if err != nil {
+		return nil, err
+	}
+	objToUpdate = unversionedObjToUpdate
+	// Store unstructured representation for possible retries.
+	p.originalObjMap = originalMap
+	// Make a getter that can return a fresh strategic patch map if needed for conflict retries
+	// We have to rebuild it each time we need it, because the map gets mutated when being applied
+	p.getOriginalPatchMap = func() (map[string]interface{}, error) {
+		patchMap := make(map[string]interface{})
+		if err := json.Unmarshal(p.patchJS, &patchMap); err != nil {
+			return nil, errors.NewBadRequest(err.Error())
+		}
+		return patchMap, nil
 	}
 
 	return objToUpdate, nil
@@ -526,9 +526,9 @@ func (p *patcher) patchResource(ctx request.Context) (runtime.Object, error) {
 	p.namespace = request.NamespaceValue(ctx)
 	switch p.patchType {
 	case types.JSONPatchType, types.MergePatchType:
-		p.mechanism = &jsonPatcher{patcher:p}
+		p.mechanism = &jsonPatcher{patcher: p}
 	case types.StrategicMergePatchType:
-		p.mechanism = &smpPatcher{patcher:p}
+		p.mechanism = &smpPatcher{patcher: p}
 	default:
 		return nil, fmt.Errorf("%v: unimplemented patch type", p.patchType)
 	}
