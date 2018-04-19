@@ -236,12 +236,6 @@ func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentRes
 
 	objToUpdate := p.restPatcher.New()
 
-	switch p.patchType {
-	case types.JSONPatchType, types.MergePatchType:
-	default:
-		panic(fmt.Sprintf("%v: not the right patch type for this code path", p.patchType))
-	}
-
 	originalJS, patchedJS, err := patchObjectJSON(p.patchType, p.codec, currentObject, p.patchJS, objToUpdate, p.versionedObj)
 	if err != nil {
 		return nil, interpretPatchError(err)
@@ -276,12 +270,6 @@ func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentReso
 	// 2. save the original and patched to detect whether there were conflicting changes on retries
 
 	objToUpdate := p.restPatcher.New()
-
-	switch p.patchType {
-	case types.StrategicMergePatchType:
-	default:
-		panic(fmt.Sprintf("%v: not the right patch type for this code path", p.patchType))
-	}
 
 	// For performance reasons, in case of strategicpatch, we avoid json
 	// marshaling and unmarshaling and operate just on map[string]interface{}.
@@ -336,12 +324,6 @@ func (p *jsonPatcher) subsequentPatchAttempt(currentObject runtime.Object, curre
 	// 2. build a strategic merge patch from originalJS and the currentJS
 	// 3. ensure no conflicts between the two patches
 	// 4. apply the #1 patch to the currentJS object
-
-	switch p.patchType {
-	case types.JSONPatchType, types.MergePatchType:
-	default:
-		panic(fmt.Sprintf("%v: not the right patch type for this code path", p.patchType))
-	}
 
 	// Since the patch is applied on versioned objects, we need to convert the
 	// current object to versioned representation first.
@@ -423,12 +405,6 @@ func (p *smpPatcher) subsequentPatchAttempt(currentObject runtime.Object, curren
 	// 2. build a strategic merge patch from originalJS and the currentJS
 	// 3. ensure no conflicts between the two patches
 	// 4. apply the #1 patch to the currentJS object
-
-	switch p.patchType {
-	case types.StrategicMergePatchType:
-	default:
-		panic(fmt.Sprintf("%v: not the right patch type for this code path", p.patchType))
-	}
 
 	// Since the patch is applied on versioned objects, we need to convert the
 	// current object to versioned representation first.
