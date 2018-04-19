@@ -347,6 +347,7 @@ func (tc *patchTestCase) Run(t *testing.T) {
 
 			createValidation: rest.ValidateAllObjectFunc,
 			updateValidation: admissionValidation,
+			admissionCheck: admissionMutation,
 
 			codec: codec,
 
@@ -354,17 +355,15 @@ func (tc *patchTestCase) Run(t *testing.T) {
 
 			versionedObj: versionedObj,
 
+			patcher: testPatcher,
+			name: name,
+			patchType: patchType,
+			patchJS: patch,
+
 			trace: utiltrace.New("Patch" + name),
 		}
 
-		resultObj, err := p.patchResource(
-			ctx,
-			admissionMutation,
-			testPatcher,
-			name,
-			patchType,
-			patch,
-		)
+		resultObj, err := p.patchResource(ctx)
 		if len(tc.expectedError) != 0 {
 			if err == nil || err.Error() != tc.expectedError {
 				t.Errorf("%s: expected error %v, but got %v", tc.name, tc.expectedError, err)
