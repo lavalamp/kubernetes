@@ -267,9 +267,6 @@ func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentRes
 		return originalPatchMap, nil
 	}
 
-	if err := checkName(objToUpdate, p.name, p.namespace, p.namer); err != nil {
-		return nil, err
-	}
 	return objToUpdate, nil
 }
 
@@ -328,9 +325,6 @@ func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentReso
 		return patchMap, nil
 	}
 
-	if err := checkName(objToUpdate, p.name, p.namespace, p.namer); err != nil {
-		return nil, err
-	}
 	return objToUpdate, nil
 }
 
@@ -519,7 +513,14 @@ func (p *patcher) applyPatch(_ request.Context, _, currentObject runtime.Object)
 
 	if p.iterationCount == 1 {
 		p.originalResourceVersion = currentResourceVersion
-		return p.mechanism.firstPatchAttempt(currentObject, currentResourceVersion)
+		objToUpdate, err := p.mechanism.firstPatchAttempt(currentObject, currentResourceVersion)
+		if err != nil {
+			return nil, err
+		}
+		if err := checkName(objToUpdate, p.name, p.namespace, p.namer); err != nil {
+			return nil, err
+		}
+		return objToUpdate, nil
 	}
 	return p.mechanism.subsequentPatchAttempt(currentObject, currentResourceVersion)
 }
