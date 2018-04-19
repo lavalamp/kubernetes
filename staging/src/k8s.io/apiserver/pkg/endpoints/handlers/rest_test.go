@@ -355,7 +355,7 @@ func (tc *patchTestCase) Run(t *testing.T) {
 
 			versionedObj: versionedObj,
 
-			patcher:   testPatcher,
+			restPatcher:   testPatcher,
 			name:      name,
 			patchType: patchType,
 			patchJS:   patch,

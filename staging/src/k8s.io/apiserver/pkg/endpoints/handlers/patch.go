@@ -133,7 +133,7 @@ func PatchResource(r rest.Patcher, scope RequestScope, admit admission.Interface
 
 			versionedObj: versionedObj,
 
-			patcher:   r,
+			restPatcher:   r,
 			name:      name,
 			patchType: patchType,
 			patchJS:   patchJS,
@@ -187,7 +187,7 @@ type patcher struct {
 	versionedObj runtime.Object
 
 	// Operation information
-	patcher   rest.Patcher
+	restPatcher   rest.Patcher
 	name      string
 	patchType types.PatchType
 	patchJS   []byte
@@ -197,29 +197,44 @@ type patcher struct {
 	// Set at construction time and immutable
 	namespace         string
 	updatedObjectInfo rest.UpdatedObjectInfo
+	mechanism         patchMechanism
 
-	// These variables are set and mutated post construction
-	// TODO: split into separate object or otherwise make that not true
-	
-	// For JSON patch
-	originalObjJS           []byte
-	originalPatchedObjJS    []byte
-
-	// For SMP patch
-	originalObjMap          map[string]interface{}
-
-	// For both
-	getOriginalPatchMap     func() (map[string]interface{}, error)
+	// Modified each iteration
+	iterationCount int
 	lastConflictErr         error
+
+	// Set on first iteration
 	originalResourceVersion string
 }
 
-func (p *patcher) firstPatchAttemptJSON(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
+type patchMechanism interface {
+	firstPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error)
+	subsequentPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error)
+}
+
+type jsonPatcher struct {
+	*patcher
+
+	originalObjJS           []byte
+	originalPatchedObjJS    []byte
+
+	getOriginalPatchMap     func() (map[string]interface{}, error)
+}
+
+type smpPatcher struct {
+	*patcher
+
+	originalObjMap          map[string]interface{}
+
+	getOriginalPatchMap     func() (map[string]interface{}, error)
+}
+
+func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
 	// first time through,
 	// 1. apply the patch
 	// 2. save the original and patched to detect whether there were conflicting changes on retries
 
-	objToUpdate := p.patcher.New()
+	objToUpdate := p.restPatcher.New()
 
 	switch p.patchType {
 	case types.JSONPatchType, types.MergePatchType:
@@ -258,12 +273,12 @@ func (p *patcher) firstPatchAttemptJSON(currentObject runtime.Object, currentRes
 	return objToUpdate, nil
 }
 
-func (p *patcher) firstPatchAttemptSMP(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
+func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
 	// first time through,
 	// 1. apply the patch
 	// 2. save the original and patched to detect whether there were conflicting changes on retries
 
-	objToUpdate := p.patcher.New()
+	objToUpdate := p.restPatcher.New()
 
 	switch p.patchType {
 	case types.StrategicMergePatchType:
@@ -319,7 +334,7 @@ func (p *patcher) firstPatchAttemptSMP(currentObject runtime.Object, currentReso
 	return objToUpdate, nil
 }
 
-func (p *patcher) subsequentPatchAttemptsJSON(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
+func (p *jsonPatcher) subsequentPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
 	// on a conflict (which is the only reason to have more than one attempt),
 	// 1. build a strategic merge patch from originalJS and the patchedJS.  Different patch types can
 	//    be specified, but a strategic merge patch should be expressive enough handle them.  Build the
@@ -406,7 +421,7 @@ func (p *patcher) subsequentPatchAttemptsJSON(currentObject runtime.Object, curr
 	return objToUpdate, nil
 }
 
-func (p *patcher) subsequentPatchAttemptsSMP(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
+func (p *smpPatcher) subsequentPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
 	// on a conflict (which is the only reason to have more than one attempt),
 	// 1. build a strategic merge patch from originalJS and the patchedJS.  Different patch types can
 	//    be specified, but a strategic merge patch should be expressive enough handle them.  Build the
@@ -500,30 +515,13 @@ func (p *patcher) applyPatch(_ request.Context, _, currentObject runtime.Object)
 		currentResourceVersion = currentMetadata.GetResourceVersion()
 	}
 
-	switch {
-	case p.originalObjJS == nil && p.originalObjMap == nil:
-		p.originalResourceVersion = currentResourceVersion
+	p.iterationCount++
 
-		// TODO: make this into a look-up table.
-		switch p.patchType {
-		case types.JSONPatchType, types.MergePatchType:
-			return p.firstPatchAttemptJSON(currentObject, currentResourceVersion)
-		case types.StrategicMergePatchType:
-			return p.firstPatchAttemptSMP(currentObject, currentResourceVersion)
-		default:
-			panic("coding error")
-		}
-	default:
-		// TODO: make this into a look-up table.
-		switch p.patchType {
-		case types.JSONPatchType, types.MergePatchType:
-			return p.subsequentPatchAttemptsJSON(currentObject, currentResourceVersion)
-		case types.StrategicMergePatchType:
-			return p.subsequentPatchAttemptsSMP(currentObject, currentResourceVersion)
-		default:
-			panic("coding error")
-		}
+	if p.iterationCount == 1 {
+		p.originalResourceVersion = currentResourceVersion
+		return p.mechanism.firstPatchAttempt(currentObject, currentResourceVersion)
 	}
+	return p.mechanism.subsequentPatchAttempt(currentObject, currentResourceVersion)
 }
 
 // applyAdmission is called every time GuaranteedUpdate asks for the updated object,
@@ -537,10 +535,10 @@ func (p *patcher) requestLoop(ctx request.Context) func() (runtime.Object, error
 	// return a function to catch ctx in a closure, until finishRequest
 	// starts handling the context.
 	return func() (runtime.Object, error) {
-		updateObject, _, updateErr := p.patcher.Update(ctx, p.name, p.updatedObjectInfo, p.createValidation, p.updateValidation)
+		updateObject, _, updateErr := p.restPatcher.Update(ctx, p.name, p.updatedObjectInfo, p.createValidation, p.updateValidation)
 		for i := 0; i < MaxRetryWhenPatchConflicts && (errors.IsConflict(updateErr)); i++ {
 			p.lastConflictErr = updateErr
-			updateObject, _, updateErr = p.patcher.Update(ctx, p.name, p.updatedObjectInfo, p.createValidation, p.updateValidation)
+			updateObject, _, updateErr = p.restPatcher.Update(ctx, p.name, p.updatedObjectInfo, p.createValidation, p.updateValidation)
 		}
 		return updateObject, updateErr
 	}
@@ -549,6 +547,14 @@ func (p *patcher) requestLoop(ctx request.Context) func() (runtime.Object, error
 // patchResource divides PatchResource for easier unit testing
 func (p *patcher) patchResource(ctx request.Context) (runtime.Object, error) {
 	p.namespace = request.NamespaceValue(ctx)
+	switch p.patchType {
+	case types.JSONPatchType, types.MergePatchType:
+		p.mechanism = &jsonPatcher{patcher:p}
+	case types.StrategicMergePatchType:
+		p.mechanism = &smpPatcher{patcher:p}
+	default:
+		return nil, fmt.Errorf("%v: unimplemented patch type", p.patchType)
+	}
 	p.updatedObjectInfo = rest.DefaultUpdatedObjectInfo(nil, p.applyPatch, p.applyAdmission)
 	return finishRequest(p.timeout, p.requestLoop(ctx))
 }
