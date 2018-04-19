@@ -352,13 +352,14 @@ func (tc *patchTestCase) Run(t *testing.T) {
 
 			timeout: 1 * time.Second,
 
+			versionedObj: versionedObj,
+
 			trace: utiltrace.New("Patch" + name),
 		}
 
 		resultObj, err := p.patchResource(
 			ctx,
 			admissionMutation,
-			versionedObj,
 			testPatcher,
 			name,
 			patchType,
