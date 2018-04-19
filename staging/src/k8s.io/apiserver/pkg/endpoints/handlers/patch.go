@@ -125,7 +125,7 @@ func PatchResource(r rest.Patcher, scope RequestScope, admit admission.Interface
 
 			createValidation: rest.AdmissionToValidateObjectFunc(admit, staticAdmissionAttributes),
 			updateValidation: rest.AdmissionToValidateObjectUpdateFunc(admit, staticAdmissionAttributes),
-			admissionCheck: admissionCheck,
+			admissionCheck:   admissionCheck,
 
 			codec: codec,
 
@@ -133,10 +133,10 @@ func PatchResource(r rest.Patcher, scope RequestScope, admit admission.Interface
 
 			versionedObj: versionedObj,
 
-			patcher: r,
-			name: name,
+			patcher:   r,
+			name:      name,
 			patchType: patchType,
-			patchJS: patchJS,
+			patchJS:   patchJS,
 
 			trace: trace,
 		}
@@ -177,7 +177,7 @@ type patcher struct {
 	// Validation functions
 	createValidation rest.ValidateObjectFunc
 	updateValidation rest.ValidateObjectUpdateFunc
-	admissionCheck mutateObjectUpdateFunc
+	admissionCheck   mutateObjectUpdateFunc
 
 	codec runtime.Codec
 
@@ -187,27 +187,27 @@ type patcher struct {
 	versionedObj runtime.Object
 
 	// Operation information
-	patcher rest.Patcher
-	name string
+	patcher   rest.Patcher
+	name      string
 	patchType types.PatchType
-	patchJS []byte
+	patchJS   []byte
 
 	trace *utiltrace.Trace
+
+	// these variables are mutated post construction
+	// TODO: split into separate object or otherwise make that not true
+	originalObjJS           []byte
+	originalPatchedObjJS    []byte
+	originalObjMap          map[string]interface{}
+	getOriginalPatchMap     func() (map[string]interface{}, error)
+	lastConflictErr         error
+	originalResourceVersion string
 }
 
 // patchResource divides PatchResource for easier unit testing
 func (p *patcher) patchResource(ctx request.Context) (runtime.Object, error) {
 
 	namespace := request.NamespaceValue(ctx)
-
-	var (
-		originalObjJS           []byte
-		originalPatchedObjJS    []byte
-		originalObjMap          map[string]interface{}
-		getOriginalPatchMap     func() (map[string]interface{}, error)
-		lastConflictErr         error
-		originalResourceVersion string
-	)
 
 	// applyPatch is called every time GuaranteedUpdate asks for the updated object,
 	// and is given the currently persisted object as input.
@@ -226,12 +226,12 @@ func (p *patcher) patchResource(ctx request.Context) (runtime.Object, error) {
 		}
 
 		switch {
-		case originalObjJS == nil && originalObjMap == nil:
+		case p.originalObjJS == nil && p.originalObjMap == nil:
 			// first time through,
 			// 1. apply the patch
 			// 2. save the original and patched to detect whether there were conflicting changes on retries
 
-			originalResourceVersion = currentResourceVersion
+			p.originalResourceVersion = currentResourceVersion
 			objToUpdate := p.patcher.New()
 
 			// For performance reasons, in case of strategicpatch, we avoid json
@@ -244,15 +244,15 @@ func (p *patcher) patchResource(ctx request.Context) (runtime.Object, error) {
 				if err != nil {
 					return nil, interpretPatchError(err)
 				}
-				originalObjJS, originalPatchedObjJS = originalJS, patchedJS
+				p.originalObjJS, p.originalPatchedObjJS = originalJS, patchedJS
 
 				// Make a getter that can return a fresh strategic patch map if needed for conflict retries
 				// We have to rebuild it each time we need it, because the map gets mutated when being applied
 				var originalPatchBytes []byte
-				getOriginalPatchMap = func() (map[string]interface{}, error) {
+				p.getOriginalPatchMap = func() (map[string]interface{}, error) {
 					if originalPatchBytes == nil {
 						// Compute once
-						originalPatchBytes, err = strategicpatch.CreateTwoWayMergePatch(originalObjJS, originalPatchedObjJS, p.versionedObj)
+						originalPatchBytes, err = strategicpatch.CreateTwoWayMergePatch(p.originalObjJS, p.originalPatchedObjJS, p.versionedObj)
 						if err != nil {
 							return nil, interpretPatchError(err)
 						}
@@ -292,10 +292,10 @@ func (p *patcher) patchResource(ctx request.Context) (runtime.Object, error) {
 				}
 				objToUpdate = unversionedObjToUpdate
 				// Store unstructured representation for possible retries.
-				originalObjMap = originalMap
+				p.originalObjMap = originalMap
 				// Make a getter that can return a fresh strategic patch map if needed for conflict retries
 				// We have to rebuild it each time we need it, because the map gets mutated when being applied
-				getOriginalPatchMap = func() (map[string]interface{}, error) {
+				p.getOriginalPatchMap = func() (map[string]interface{}, error) {
 					patchMap := make(map[string]interface{})
 					if err := json.Unmarshal(p.patchJS, &patchMap); err != nil {
 						return nil, errors.NewBadRequest(err.Error())
@@ -329,9 +329,9 @@ func (p *patcher) patchResource(ctx request.Context) (runtime.Object, error) {
 			}
 
 			var currentPatchMap map[string]interface{}
-			if originalObjMap != nil {
+			if p.originalObjMap != nil {
 				var err error
-				currentPatchMap, err = strategicpatch.CreateTwoWayMergeMapPatch(originalObjMap, currentObjMap, p.versionedObj)
+				currentPatchMap, err = strategicpatch.CreateTwoWayMergeMapPatch(p.originalObjMap, currentObjMap, p.versionedObj)
 				if err != nil {
 					return nil, interpretPatchError(err)
 				}
@@ -341,7 +341,7 @@ func (p *patcher) patchResource(ctx request.Context) (runtime.Object, error) {
 				if err != nil {
 					return nil, err
 				}
-				currentPatch, err := strategicpatch.CreateTwoWayMergePatch(originalObjJS, currentObjJS, p.versionedObj)
+				currentPatch, err := strategicpatch.CreateTwoWayMergePatch(p.originalObjJS, currentObjJS, p.versionedObj)
 				if err != nil {
 					return nil, interpretPatchError(err)
 				}
@@ -352,7 +352,7 @@ func (p *patcher) patchResource(ctx request.Context) (runtime.Object, error) {
 			}
 
 			// Get a fresh copy of the original strategic patch each time through, since applying it mutates the map
-			originalPatchMap, err := getOriginalPatchMap()
+			originalPatchMap, err := p.getOriginalPatchMap()
 			if err != nil {
 				return nil, err
 			}
@@ -369,12 +369,12 @@ func (p *patcher) patchResource(ctx request.Context) (runtime.Object, error) {
 			if hasConflicts {
 				diff1, _ := json.Marshal(currentPatchMap)
 				diff2, _ := json.Marshal(originalPatchMap)
-				patchDiffErr := fmt.Errorf("there is a meaningful conflict (firstResourceVersion: %q, currentResourceVersion: %q):\n diff1=%v\n, diff2=%v\n", originalResourceVersion, currentResourceVersion, string(diff1), string(diff2))
-				glog.V(4).Infof("patchResource failed for resource %s, because there is a meaningful conflict(firstResourceVersion: %q, currentResourceVersion: %q):\n diff1=%v\n, diff2=%v\n", p.name, originalResourceVersion, currentResourceVersion, string(diff1), string(diff2))
+				patchDiffErr := fmt.Errorf("there is a meaningful conflict (firstResourceVersion: %q, currentResourceVersion: %q):\n diff1=%v\n, diff2=%v\n", p.originalResourceVersion, currentResourceVersion, string(diff1), string(diff2))
+				glog.V(4).Infof("patchResource failed for resource %s, because there is a meaningful conflict(firstResourceVersion: %q, currentResourceVersion: %q):\n diff1=%v\n, diff2=%v\n", p.name, p.originalResourceVersion, currentResourceVersion, string(diff1), string(diff2))
 
 				// Return the last conflict error we got if we have one
-				if lastConflictErr != nil {
-					return nil, lastConflictErr
+				if p.lastConflictErr != nil {
+					return nil, p.lastConflictErr
 				}
 				// Otherwise manufacture one of our own
 				return nil, errors.NewConflict(p.resource.GroupResource(), p.name, patchDiffErr)
@@ -409,7 +409,7 @@ func (p *patcher) patchResource(ctx request.Context) (runtime.Object, error) {
 	return finishRequest(p.timeout, func() (runtime.Object, error) {
 		updateObject, _, updateErr := p.patcher.Update(ctx, p.name, updatedObjectInfo, p.createValidation, p.updateValidation)
 		for i := 0; i < MaxRetryWhenPatchConflicts && (errors.IsConflict(updateErr)); i++ {
-			lastConflictErr = updateErr
+			p.lastConflictErr = updateErr
 			updateObject, _, updateErr = p.patcher.Update(ctx, p.name, updatedObjectInfo, p.createValidation, p.updateValidation)
 		}
 		return updateObject, updateErr

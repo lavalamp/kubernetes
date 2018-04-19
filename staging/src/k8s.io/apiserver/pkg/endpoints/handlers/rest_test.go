@@ -347,7 +347,7 @@ func (tc *patchTestCase) Run(t *testing.T) {
 
 			createValidation: rest.ValidateAllObjectFunc,
 			updateValidation: admissionValidation,
-			admissionCheck: admissionMutation,
+			admissionCheck:   admissionMutation,
 
 			codec: codec,
 
@@ -355,10 +355,10 @@ func (tc *patchTestCase) Run(t *testing.T) {
 
 			versionedObj: versionedObj,
 
-			patcher: testPatcher,
-			name: name,
+			patcher:   testPatcher,
+			name:      name,
 			patchType: patchType,
-			patchJS: patch,
+			patchJS:   patch,
 
 			trace: utiltrace.New("Patch" + name),
 		}
