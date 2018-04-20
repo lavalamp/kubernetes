@@ -245,14 +245,6 @@ func (p *jsonPatcher) getOriginalPatchMap() (map[string]interface{}, error) {
 	return originalPatchMap, nil
 }
 
-type smpPatcher struct {
-	*patcher
-
-	originalObjMap map[string]interface{}
-
-	getOriginalPatchMap func() (map[string]interface{}, error)
-}
-
 func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
 	// first time through,
 	// 1. apply the patch
@@ -348,6 +340,14 @@ func (p *jsonPatcher) subsequentPatchAttempt(currentObject runtime.Object, curre
 	}
 
 	return objToUpdate, nil
+}
+
+type smpPatcher struct {
+	*patcher
+
+	originalObjMap map[string]interface{}
+
+	getOriginalPatchMap func() (map[string]interface{}, error)
 }
 
 func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
