@@ -341,7 +341,7 @@ func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentReso
 		return nil, err
 	}
 	// Capture the original object map and patch for possible retries.
-	originalMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(currentVersionedObject)
+	p.originalObjMap, err = runtime.DefaultUnstructuredConverter.ToUnstructured(currentVersionedObject)
 	if err != nil {
 		return nil, err
 	}
@@ -353,8 +353,6 @@ func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentReso
 	if err != nil {
 		return nil, err
 	}
-	// Store unstructured representation for possible retries.
-	p.originalObjMap = originalMap
 
 	return unversionedObjToUpdate, nil
 }
