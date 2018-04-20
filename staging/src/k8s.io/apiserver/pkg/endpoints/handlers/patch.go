@@ -359,6 +359,35 @@ func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentReso
 	return unversionedObjToUpdate, nil
 }
 
+// strategicPatchObject applies a strategic merge patch of <patchJS> to
+// <originalObject> and stores the result in <objToUpdate>.
+// It additionally returns the map[string]interface{} representation of the
+// <originalObject> and <patchJS>.
+// NOTE: Both <originalObject> and <objToUpdate> are supposed to be versioned.
+func strategicPatchObject(
+	codec runtime.Codec,
+	defaulter runtime.ObjectDefaulter,
+	originalObject runtime.Object,
+	patchJS []byte,
+	objToUpdate runtime.Object,
+	schemaReferenceObj runtime.Object,
+) error {
+	originalObjMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(originalObject)
+	if err != nil {
+		return err
+	}
+
+	patchMap := make(map[string]interface{})
+	if err := json.Unmarshal(patchJS, &patchMap); err != nil {
+		return errors.NewBadRequest(err.Error())
+	}
+
+	if err := applyPatchToObject(codec, defaulter, originalObjMap, patchMap, objToUpdate, schemaReferenceObj); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (p *smpPatcher) subsequentPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
 	return subsequentPatchLogic(p.patcher, p, currentObject, currentResourceVersion)
 }
@@ -522,35 +551,6 @@ func (p *patcher) patchResource(ctx request.Context) (runtime.Object, error) {
 	}
 	p.updatedObjectInfo = rest.DefaultUpdatedObjectInfo(nil, p.applyPatch, p.applyAdmission)
 	return finishRequest(p.timeout, p.requestLoop(ctx))
-}
-
-// strategicPatchObject applies a strategic merge patch of <patchJS> to
-// <originalObject> and stores the result in <objToUpdate>.
-// It additionally returns the map[string]interface{} representation of the
-// <originalObject> and <patchJS>.
-// NOTE: Both <originalObject> and <objToUpdate> are supposed to be versioned.
-func strategicPatchObject(
-	codec runtime.Codec,
-	defaulter runtime.ObjectDefaulter,
-	originalObject runtime.Object,
-	patchJS []byte,
-	objToUpdate runtime.Object,
-	schemaReferenceObj runtime.Object,
-) error {
-	originalObjMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(originalObject)
-	if err != nil {
-		return err
-	}
-
-	patchMap := make(map[string]interface{})
-	if err := json.Unmarshal(patchJS, &patchMap); err != nil {
-		return errors.NewBadRequest(err.Error())
-	}
-
-	if err := applyPatchToObject(codec, defaulter, originalObjMap, patchMap, objToUpdate, schemaReferenceObj); err != nil {
-		return err
-	}
-	return nil
 }
 
 // applyPatchToObject applies a strategic merge patch of <patchMap> to
