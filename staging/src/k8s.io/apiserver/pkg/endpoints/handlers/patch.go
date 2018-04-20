@@ -218,7 +218,31 @@ type jsonPatcher struct {
 	originalObjJS        []byte
 	originalPatchedObjJS []byte
 
-	getOriginalPatchMap func() (map[string]interface{}, error)
+	// State for getOriginalPatchMap
+	originalPatchBytes []byte
+}
+
+// Return a fresh strategic patch map if needed for conflict retries. We have
+// to rebuild it each time we need it, because the map gets mutated when being
+// applied.
+func (p *jsonPatcher) getOriginalPatchMap() (map[string]interface{}, error) {
+	if p.originalPatchBytes == nil {
+		// Compute once. Compute here instead of in the first patch
+		// attempt because this isn't needed unless there's actually a
+		// conflict.
+		var err error
+		p.originalPatchBytes, err = strategicpatch.CreateTwoWayMergePatch(p.originalObjJS, p.originalPatchedObjJS, p.versionedObj)
+		if err != nil {
+			return nil, interpretPatchError(err)
+		}
+	}
+
+	// Return a fresh map every time
+	originalPatchMap := make(map[string]interface{})
+	if err := json.Unmarshal(p.originalPatchBytes, &originalPatchMap); err != nil {
+		return nil, errors.NewBadRequest(err.Error())
+	}
+	return originalPatchMap, nil
 }
 
 type smpPatcher struct {
@@ -241,25 +265,6 @@ func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentRes
 		return nil, interpretPatchError(err)
 	}
 	p.originalObjJS, p.originalPatchedObjJS = originalJS, patchedJS
-
-	// Make a getter that can return a fresh strategic patch map if needed for conflict retries
-	// We have to rebuild it each time we need it, because the map gets mutated when being applied
-	var originalPatchBytes []byte
-	p.getOriginalPatchMap = func() (map[string]interface{}, error) {
-		if originalPatchBytes == nil {
-			// Compute once
-			originalPatchBytes, err = strategicpatch.CreateTwoWayMergePatch(p.originalObjJS, p.originalPatchedObjJS, p.versionedObj)
-			if err != nil {
-				return nil, interpretPatchError(err)
-			}
-		}
-		// Return a fresh map every time
-		originalPatchMap := make(map[string]interface{})
-		if err := json.Unmarshal(originalPatchBytes, &originalPatchMap); err != nil {
-			return nil, errors.NewBadRequest(err.Error())
-		}
-		return originalPatchMap, nil
-	}
 
 	return objToUpdate, nil
 }
