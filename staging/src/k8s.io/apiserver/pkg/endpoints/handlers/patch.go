@@ -79,7 +79,7 @@ func PatchResource(r rest.Patcher, scope RequestScope, admit admission.Interface
 		ctx := scope.ContextFunc(req)
 		ctx = request.WithNamespace(ctx, namespace)
 
-		versionedObj, err := converter.ConvertToVersion(r.New(), scope.Kind.GroupVersion())
+		schemaReferenceObj, err := converter.ConvertToVersion(r.New(), scope.Kind.GroupVersion())
 		if err != nil {
 			scope.err(err, w, req)
 			return
@@ -131,7 +131,7 @@ func PatchResource(r rest.Patcher, scope RequestScope, admit admission.Interface
 
 			timeout: timeout,
 
-			versionedObj: versionedObj,
+			schemaReferenceObj: schemaReferenceObj,
 
 			restPatcher: r,
 			name:        name,
@@ -184,7 +184,7 @@ type patcher struct {
 	timeout time.Duration
 
 	// Schema
-	versionedObj runtime.Object
+	schemaReferenceObj runtime.Object
 
 	// Operation information
 	restPatcher rest.Patcher
@@ -231,7 +231,7 @@ func (p *jsonPatcher) originalStrategicMergePatch() (map[string]interface{}, err
 		// attempt because this isn't needed unless there's actually a
 		// conflict.
 		var err error
-		p.originalPatchBytes, err = strategicpatch.CreateTwoWayMergePatch(p.originalObjJS, p.originalPatchedObjJS, p.versionedObj)
+		p.originalPatchBytes, err = strategicpatch.CreateTwoWayMergePatch(p.originalObjJS, p.originalPatchedObjJS, p.schemaReferenceObj)
 		if err != nil {
 			return nil, interpretPatchError(err)
 		}
@@ -251,7 +251,7 @@ func (p *jsonPatcher) computeStrategicMergePatch(currentObject runtime.Object, _
 	if err != nil {
 		return nil, err
 	}
-	currentPatch, err := strategicpatch.CreateTwoWayMergePatch(p.originalObjJS, currentObjJS, p.versionedObj)
+	currentPatch, err := strategicpatch.CreateTwoWayMergePatch(p.originalObjJS, currentObjJS, p.schemaReferenceObj)
 	if err != nil {
 		return nil, interpretPatchError(err)
 	}
@@ -270,7 +270,7 @@ func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentRes
 
 	objToUpdate := p.restPatcher.New()
 
-	originalJS, patchedJS, err := patchObjectJSON(p.patchType, p.codec, currentObject, p.patchJS, objToUpdate, p.versionedObj)
+	originalJS, patchedJS, err := patchObjectJSON(p.patchType, p.codec, currentObject, p.patchJS, objToUpdate, p.schemaReferenceObj)
 	if err != nil {
 		return nil, interpretPatchError(err)
 	}
@@ -301,7 +301,7 @@ func (p *smpPatcher) originalStrategicMergePatch() (map[string]interface{}, erro
 }
 
 func (p *smpPatcher) computeStrategicMergePatch(_ runtime.Object, currentObjMap map[string]interface{}) (map[string]interface{}, error) {
-	return strategicpatch.CreateTwoWayMergeMapPatch(p.originalObjMap, currentObjMap, p.versionedObj)
+	return strategicpatch.CreateTwoWayMergeMapPatch(p.originalObjMap, currentObjMap, p.schemaReferenceObj)
 }
 
 func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
@@ -331,7 +331,7 @@ func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentReso
 	if err != nil {
 		return nil, err
 	}
-	if err := strategicPatchObject(p.codec, p.defaulter, currentVersionedObject, p.patchJS, versionedObjToUpdate, p.versionedObj); err != nil {
+	if err := strategicPatchObject(p.codec, p.defaulter, currentVersionedObject, p.patchJS, versionedObjToUpdate, p.schemaReferenceObj); err != nil {
 		return nil, err
 	}
 	// Convert the object back to unversioned.
@@ -393,7 +393,7 @@ func subsequentPatchLogic(p *patcher, ps patchSource, currentObject runtime.Obje
 		return nil, err
 	}
 
-	patchMetaFromStruct, err := strategicpatch.NewPatchMetaFromStruct(p.versionedObj)
+	patchMetaFromStruct, err := strategicpatch.NewPatchMetaFromStruct(p.schemaReferenceObj)
 	if err != nil {
 		return nil, err
 	}
@@ -420,7 +420,7 @@ func subsequentPatchLogic(p *patcher, ps patchSource, currentObject runtime.Obje
 	if err != nil {
 		return nil, err
 	}
-	if err := applyPatchToObject(p.codec, p.defaulter, currentObjMap, originalPatchMap, versionedObjToUpdate, p.versionedObj); err != nil {
+	if err := applyPatchToObject(p.codec, p.defaulter, currentObjMap, originalPatchMap, versionedObjToUpdate, p.schemaReferenceObj); err != nil {
 		return nil, err
 	}
 	// Convert the object back to unversioned.
@@ -511,7 +511,7 @@ func patchObjectJSON(
 	originalObject runtime.Object,
 	patchJS []byte,
 	objToUpdate runtime.Object,
-	versionedObj runtime.Object,
+	schemaReferenceObj runtime.Object,
 ) (originalObjJS []byte, patchedObjJS []byte, retErr error) {
 	// originalObject is unversioned, but Encode will output versioned
 	// object in JSON.
@@ -536,7 +536,7 @@ func patchObjectJSON(
 		}
 	case types.StrategicMergePatchType:
 		panic("not reachable")
-		if patchedObjJS, err = strategicpatch.StrategicMergePatch(originalObjJS, patchJS, versionedObj); err != nil {
+		if patchedObjJS, err = strategicpatch.StrategicMergePatch(originalObjJS, patchJS, schemaReferenceObj); err != nil {
 			return nil, nil, err
 		}
 	default:
@@ -560,7 +560,7 @@ func strategicPatchObject(
 	originalObject runtime.Object,
 	patchJS []byte,
 	objToUpdate runtime.Object,
-	versionedObj runtime.Object,
+	schemaReferenceObj runtime.Object,
 ) error {
 	originalObjMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(originalObject)
 	if err != nil {
@@ -572,7 +572,7 @@ func strategicPatchObject(
 		return errors.NewBadRequest(err.Error())
 	}
 
-	if err := applyPatchToObject(codec, defaulter, originalObjMap, patchMap, objToUpdate, versionedObj); err != nil {
+	if err := applyPatchToObject(codec, defaulter, originalObjMap, patchMap, objToUpdate, schemaReferenceObj); err != nil {
 		return err
 	}
 	return nil
@@ -587,9 +587,9 @@ func applyPatchToObject(
 	originalMap map[string]interface{},
 	patchMap map[string]interface{},
 	objToUpdate runtime.Object,
-	versionedObj runtime.Object,
+	schemaReferenceObj runtime.Object,
 ) error {
-	patchedObjMap, err := strategicpatch.StrategicMergeMapPatch(originalMap, patchMap, versionedObj)
+	patchedObjMap, err := strategicpatch.StrategicMergeMapPatch(originalMap, patchMap, schemaReferenceObj)
 	if err != nil {
 		return interpretPatchError(err)
 	}
