@@ -222,47 +222,6 @@ type jsonPatcher struct {
 	originalPatchBytes []byte
 }
 
-// Return a fresh strategic patch map if needed for conflict retries. We have
-// to rebuild it each time we need it, because the map gets mutated when being
-// applied.
-func (p *jsonPatcher) originalStrategicMergePatch() (map[string]interface{}, error) {
-	if p.originalPatchBytes == nil {
-		// Compute once. Compute here instead of in the first patch
-		// attempt because this isn't needed unless there's actually a
-		// conflict.
-		var err error
-		p.originalPatchBytes, err = strategicpatch.CreateTwoWayMergePatch(p.originalObjJS, p.originalPatchedObjJS, p.schemaReferenceObj)
-		if err != nil {
-			return nil, interpretPatchError(err)
-		}
-	}
-
-	// Return a fresh map every time
-	originalPatchMap := make(map[string]interface{})
-	if err := json.Unmarshal(p.originalPatchBytes, &originalPatchMap); err != nil {
-		return nil, errors.NewBadRequest(err.Error())
-	}
-	return originalPatchMap, nil
-}
-
-func (p *jsonPatcher) computeStrategicMergePatch(currentObject runtime.Object, _ map[string]interface{}) (map[string]interface{}, error) {
-	// Compute current patch.
-	currentObjJS, err := runtime.Encode(p.codec, currentObject)
-	if err != nil {
-		return nil, err
-	}
-	currentPatch, err := strategicpatch.CreateTwoWayMergePatch(p.originalObjJS, currentObjJS, p.schemaReferenceObj)
-	if err != nil {
-		return nil, interpretPatchError(err)
-	}
-	currentPatchMap := make(map[string]interface{})
-	if err := json.Unmarshal(currentPatch, &currentPatchMap); err != nil {
-		return nil, errors.NewBadRequest(err.Error())
-	}
-
-	return currentPatchMap, nil
-}
-
 func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
 	var err error
 
@@ -313,25 +272,51 @@ func (p *jsonPatcher) subsequentPatchAttempt(currentObject runtime.Object, curre
 	return subsequentPatchLogic(p.patcher, p, currentObject, currentResourceVersion)
 }
 
+// Return a fresh strategic patch map if needed for conflict retries. We have
+// to rebuild it each time we need it, because the map gets mutated when being
+// applied.
+func (p *jsonPatcher) originalStrategicMergePatch() (map[string]interface{}, error) {
+	if p.originalPatchBytes == nil {
+		// Compute once. Compute here instead of in the first patch
+		// attempt because this isn't needed unless there's actually a
+		// conflict.
+		var err error
+		p.originalPatchBytes, err = strategicpatch.CreateTwoWayMergePatch(p.originalObjJS, p.originalPatchedObjJS, p.schemaReferenceObj)
+		if err != nil {
+			return nil, interpretPatchError(err)
+		}
+	}
+
+	// Return a fresh map every time
+	originalPatchMap := make(map[string]interface{})
+	if err := json.Unmarshal(p.originalPatchBytes, &originalPatchMap); err != nil {
+		return nil, errors.NewBadRequest(err.Error())
+	}
+	return originalPatchMap, nil
+}
+
+func (p *jsonPatcher) computeStrategicMergePatch(currentObject runtime.Object, _ map[string]interface{}) (map[string]interface{}, error) {
+	// Compute current patch.
+	currentObjJS, err := runtime.Encode(p.codec, currentObject)
+	if err != nil {
+		return nil, err
+	}
+	currentPatch, err := strategicpatch.CreateTwoWayMergePatch(p.originalObjJS, currentObjJS, p.schemaReferenceObj)
+	if err != nil {
+		return nil, interpretPatchError(err)
+	}
+	currentPatchMap := make(map[string]interface{})
+	if err := json.Unmarshal(currentPatch, &currentPatchMap); err != nil {
+		return nil, errors.NewBadRequest(err.Error())
+	}
+
+	return currentPatchMap, nil
+}
+
 type smpPatcher struct {
 	*patcher
 	originalObjMap map[string]interface{}
 
-}
-
-// Return a fresh strategic patch map if needed for conflict retries.  We have
-// to rebuild it each time we need it, because the map gets mutated when being
-// applied.
-func (p *smpPatcher) originalStrategicMergePatch() (map[string]interface{}, error) {
-	patchMap := make(map[string]interface{})
-	if err := json.Unmarshal(p.patchJS, &patchMap); err != nil {
-		return nil, errors.NewBadRequest(err.Error())
-	}
-	return patchMap, nil
-}
-
-func (p *smpPatcher) computeStrategicMergePatch(_ runtime.Object, currentObjMap map[string]interface{}) (map[string]interface{}, error) {
-	return strategicpatch.CreateTwoWayMergeMapPatch(p.originalObjMap, currentObjMap, p.schemaReferenceObj)
 }
 
 func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
@@ -375,6 +360,21 @@ func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentReso
 	p.originalObjMap = originalMap
 
 	return objToUpdate, nil
+}
+
+// Return a fresh strategic patch map if needed for conflict retries.  We have
+// to rebuild it each time we need it, because the map gets mutated when being
+// applied.
+func (p *smpPatcher) originalStrategicMergePatch() (map[string]interface{}, error) {
+	patchMap := make(map[string]interface{})
+	if err := json.Unmarshal(p.patchJS, &patchMap); err != nil {
+		return nil, errors.NewBadRequest(err.Error())
+	}
+	return patchMap, nil
+}
+
+func (p *smpPatcher) computeStrategicMergePatch(_ runtime.Object, currentObjMap map[string]interface{}) (map[string]interface{}, error) {
+	return strategicpatch.CreateTwoWayMergeMapPatch(p.originalObjMap, currentObjMap, p.schemaReferenceObj)
 }
 
 func (p *smpPatcher) subsequentPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
