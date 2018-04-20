@@ -245,6 +245,24 @@ func (p *jsonPatcher) originalStrategicMergePatch() (map[string]interface{}, err
 	return originalPatchMap, nil
 }
 
+func (p *jsonPatcher) computeStrategicMergePatch(currentObject runtime.Object) (map[string]interface{}, error) {
+	// Compute current patch.
+	currentObjJS, err := runtime.Encode(p.codec, currentObject)
+	if err != nil {
+		return nil, err
+	}
+	currentPatch, err := strategicpatch.CreateTwoWayMergePatch(p.originalObjJS, currentObjJS, p.versionedObj)
+	if err != nil {
+		return nil, interpretPatchError(err)
+	}
+	currentPatchMap := make(map[string]interface{})
+	if err := json.Unmarshal(currentPatch, &currentPatchMap); err != nil {
+		return nil, errors.NewBadRequest(err.Error())
+	}
+
+	return currentPatchMap, nil
+}
+
 func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
 	// first time through,
 	// 1. apply the patch
@@ -281,19 +299,9 @@ func (p *jsonPatcher) subsequentPatchAttempt(currentObject runtime.Object, curre
 		return nil, err
 	}
 
-	var currentPatchMap map[string]interface{}
-	// Compute current patch.
-	currentObjJS, err := runtime.Encode(p.codec, currentObject)
+	currentPatchMap, err := p.computeStrategicMergePatch(currentObject)
 	if err != nil {
 		return nil, err
-	}
-	currentPatch, err := strategicpatch.CreateTwoWayMergePatch(p.originalObjJS, currentObjJS, p.versionedObj)
-	if err != nil {
-		return nil, interpretPatchError(err)
-	}
-	currentPatchMap = make(map[string]interface{})
-	if err := json.Unmarshal(currentPatch, &currentPatchMap); err != nil {
-		return nil, errors.NewBadRequest(err.Error())
 	}
 
 	// Get a fresh copy of the original strategic patch each time through, since applying it mutates the map
