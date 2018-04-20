@@ -207,6 +207,11 @@ type patcher struct {
 	originalResourceVersion string
 }
 
+func (p *patcher) toUnversioned(versionedObj runtime.Object) (runtime.Object, error) {
+	gvk := p.kind.GroupKind().WithVersion(runtime.APIVersionInternal)
+	return p.unsafeConvertor.ConvertToVersion(versionedObj, gvk.GroupVersion())
+}
+
 type patchMechanism interface {
 	firstPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error)
 	subsequentPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error)
@@ -233,7 +238,7 @@ func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentRes
 	}
 
 	// Apply the patch. Store patched result for future use.
-	p.originalPatchedObjJS, err = p.patchObjectJSON(p.originalObjJS)
+	p.originalPatchedObjJS, err = p.applyJSPatch(p.originalObjJS)
 	if err != nil {
 		return nil, interpretPatchError(err)
 	}
@@ -247,12 +252,9 @@ func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentRes
 	return objToUpdate, nil
 }
 
-// patchObjectJSON patches the <originalObject> with <patchJS> and stores
-// the result in <objToUpdate>.
-// Currently it also returns the original and patched objects serialized to
-// JSONs (this may not be needed once we can apply patches at the
-// map[string]interface{} level).
-func (p *jsonPatcher) patchObjectJSON(versionedJS []byte) (patchedJS []byte, retErr error) {
+// patchJS applies the patch. Input and output objects must both have
+// the external version, since that is what the patch must have been constructed against.
+func (p *jsonPatcher) applyJSPatch(versionedJS []byte) (patchedJS []byte, retErr error) {
 	switch p.patchType {
 	case types.JSONPatchType:
 		patchObj, err := jsonpatch.DecodePatch(p.patchJS)
@@ -316,15 +318,12 @@ func (p *jsonPatcher) computeStrategicMergePatch(currentObject runtime.Object, _
 type smpPatcher struct {
 	*patcher
 	originalObjMap map[string]interface{}
-
 }
 
 func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
 	// first time through,
 	// 1. apply the patch
 	// 2. save the original and patched to detect whether there were conflicting changes on retries
-
-	objToUpdate := p.restPatcher.New()
 
 	// For performance reasons, in case of strategicpatch, we avoid json
 	// marshaling and unmarshaling and operate just on map[string]interface{}.
@@ -349,17 +348,19 @@ func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentReso
 	if err := strategicPatchObject(p.codec, p.defaulter, currentVersionedObject, p.patchJS, versionedObjToUpdate, p.schemaReferenceObj); err != nil {
 		return nil, err
 	}
-	// Convert the object back to unversioned.
-	gvk := p.kind.GroupKind().WithVersion(runtime.APIVersionInternal)
-	unversionedObjToUpdate, err := p.unsafeConvertor.ConvertToVersion(versionedObjToUpdate, gvk.GroupVersion())
+	// Convert the object back to unversioned (aka internal version).
+	unversionedObjToUpdate, err := p.toUnversioned(versionedObjToUpdate)
 	if err != nil {
 		return nil, err
 	}
-	objToUpdate = unversionedObjToUpdate
 	// Store unstructured representation for possible retries.
 	p.originalObjMap = originalMap
 
-	return objToUpdate, nil
+	return unversionedObjToUpdate, nil
+}
+
+func (p *smpPatcher) subsequentPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
+	return subsequentPatchLogic(p.patcher, p, currentObject, currentResourceVersion)
 }
 
 // Return a fresh strategic patch map if needed for conflict retries.  We have
@@ -377,11 +378,11 @@ func (p *smpPatcher) computeStrategicMergePatch(_ runtime.Object, currentObjMap 
 	return strategicpatch.CreateTwoWayMergeMapPatch(p.originalObjMap, currentObjMap, p.schemaReferenceObj)
 }
 
-func (p *smpPatcher) subsequentPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
-	return subsequentPatchLogic(p.patcher, p, currentObject, currentResourceVersion)
-}
-
+// patchSource lets you get two SMPs, an original and a current. These can be
+// compared for conflicts.
 type patchSource interface {
+	// originalStrategicMergePatch must reconstruct this map each time,
+	// because it is consumed when it is used.
 	originalStrategicMergePatch() (map[string]interface{}, error)
 	computeStrategicMergePatch(unversionedObject runtime.Object, currentVersionedObjMap map[string]interface{}) (map[string]interface{}, error)
 }
@@ -399,7 +400,6 @@ func subsequentPatchLogic(p *patcher, ps patchSource, currentObject runtime.Obje
 	// conflicts, we should do one 3-way merge, which can detect the same
 	// conflicts. This would likely be more readable and more efficient,
 	// and should be logically exactly the same operation.
-	//
 
 	// Since the patch is applied on versioned objects, we need to convert the
 	// current object to versioned representation first.
@@ -454,13 +454,7 @@ func subsequentPatchLogic(p *patcher, ps patchSource, currentObject runtime.Obje
 		return nil, err
 	}
 	// Convert the object back to unversioned.
-	gvk := p.kind.GroupKind().WithVersion(runtime.APIVersionInternal)
-	objToUpdate, err := p.unsafeConvertor.ConvertToVersion(versionedObjToUpdate, gvk.GroupVersion())
-	if err != nil {
-		return nil, err
-	}
-
-	return objToUpdate, nil
+	return p.toUnversioned(versionedObjToUpdate)
 }
 
 // applyPatch is called every time GuaranteedUpdate asks for the updated object,
