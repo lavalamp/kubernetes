@@ -79,6 +79,10 @@ func PatchResource(r rest.Patcher, scope RequestScope, admit admission.Interface
 		ctx := scope.ContextFunc(req)
 		ctx = request.WithNamespace(ctx, namespace)
 
+		// TODO: this is NOT using the scope's convertor [sic]. That seems
+		// like a potential extremely hard to find bug. Already some
+		// tests set this converter but apparently not the scope's
+		// unsafeConvertor.
 		schemaReferenceObj, err := converter.ConvertToVersion(r.New(), scope.Kind.GroupVersion())
 		if err != nil {
 			scope.err(err, w, req)
