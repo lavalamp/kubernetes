@@ -552,6 +552,20 @@ func TestPatchResourceWithConflict(t *testing.T) {
 		expectedError: `Operation cannot be fulfilled on pods.example.apiserver.k8s.io "foo": existing 2, new 1`,
 	}
 
+	// The user specified a RV, which is treated as the "base" for a
+	// three-way-merge. Implicitly, user is asking for a change from "here"
+	// -> "there", not just for the final state to be "there".
+	//
+	// Since in the mean time the value was changed to "anywhere" this will fail.
+	//
+	// NOTE(lavalamp): this behavior would make a lot more sense if
+	// apiserver could read past versions of the object. Right now if
+	// updatePod were written before apiserver gets the patch, it'll fail
+	// on RV conflict.  But if it's written after apiserver gets the patch
+	// but before it writes the patch result, it'll fail on a patch
+	// conflict (for the example in this test: non-conflicting patches
+	// would succeed).
+
 	tc.startingPod.Name = name
 	tc.startingPod.Namespace = namespace
 	tc.startingPod.UID = uid

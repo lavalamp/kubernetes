@@ -549,6 +549,8 @@ func patchObjectJSON(
 	objToUpdate runtime.Object,
 	versionedObj runtime.Object,
 ) (originalObjJS []byte, patchedObjJS []byte, retErr error) {
+	// originalObject is unversioned, but Encode will output versioned
+	// object in JSON.
 	js, err := runtime.Encode(codec, originalObject)
 	if err != nil {
 		return nil, nil, err
@@ -569,6 +571,7 @@ func patchObjectJSON(
 			return nil, nil, err
 		}
 	case types.StrategicMergePatchType:
+		panic("not reachable")
 		if patchedObjJS, err = strategicpatch.StrategicMergePatch(originalObjJS, patchJS, versionedObj); err != nil {
 			return nil, nil, err
 		}
