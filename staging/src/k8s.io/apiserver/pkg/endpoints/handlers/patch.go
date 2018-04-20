@@ -218,14 +218,14 @@ type jsonPatcher struct {
 	originalObjJS        []byte
 	originalPatchedObjJS []byte
 
-	// State for getOriginalPatchMap
+	// State for originalStrategicMergePatch
 	originalPatchBytes []byte
 }
 
 // Return a fresh strategic patch map if needed for conflict retries. We have
 // to rebuild it each time we need it, because the map gets mutated when being
 // applied.
-func (p *jsonPatcher) getOriginalPatchMap() (map[string]interface{}, error) {
+func (p *jsonPatcher) originalStrategicMergePatch() (map[string]interface{}, error) {
 	if p.originalPatchBytes == nil {
 		// Compute once. Compute here instead of in the first patch
 		// attempt because this isn't needed unless there's actually a
@@ -297,7 +297,7 @@ func (p *jsonPatcher) subsequentPatchAttempt(currentObject runtime.Object, curre
 	}
 
 	// Get a fresh copy of the original strategic patch each time through, since applying it mutates the map
-	originalPatchMap, err := p.getOriginalPatchMap()
+	originalPatchMap, err := p.originalStrategicMergePatch()
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +352,7 @@ type smpPatcher struct {
 // Return a fresh strategic patch map if needed for conflict retries.  We have
 // to rebuild it each time we need it, because the map gets mutated when being
 // applied.
-func (p *smpPatcher) getOriginalPatchMap() (map[string]interface{}, error) {
+func (p *smpPatcher) originalStrategicMergePatch() (map[string]interface{}, error) {
 	patchMap := make(map[string]interface{})
 	if err := json.Unmarshal(p.patchJS, &patchMap); err != nil {
 		return nil, errors.NewBadRequest(err.Error())
@@ -430,7 +430,7 @@ func (p *smpPatcher) subsequentPatchAttempt(currentObject runtime.Object, curren
 	}
 
 	// Get a fresh copy of the original strategic patch each time through, since applying it mutates the map
-	originalPatchMap, err := p.getOriginalPatchMap()
+	originalPatchMap, err := p.originalStrategicMergePatch()
 	if err != nil {
 		return nil, err
 	}
