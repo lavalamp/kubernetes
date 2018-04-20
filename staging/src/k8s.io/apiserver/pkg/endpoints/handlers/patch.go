@@ -347,7 +347,17 @@ type smpPatcher struct {
 
 	originalObjMap map[string]interface{}
 
-	getOriginalPatchMap func() (map[string]interface{}, error)
+}
+
+// Return a fresh strategic patch map if needed for conflict retries.  We have
+// to rebuild it each time we need it, because the map gets mutated when being
+// applied.
+func (p *smpPatcher) getOriginalPatchMap() (map[string]interface{}, error) {
+	patchMap := make(map[string]interface{})
+	if err := json.Unmarshal(p.patchJS, &patchMap); err != nil {
+		return nil, errors.NewBadRequest(err.Error())
+	}
+	return patchMap, nil
 }
 
 func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
@@ -389,15 +399,6 @@ func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentReso
 	objToUpdate = unversionedObjToUpdate
 	// Store unstructured representation for possible retries.
 	p.originalObjMap = originalMap
-	// Make a getter that can return a fresh strategic patch map if needed for conflict retries
-	// We have to rebuild it each time we need it, because the map gets mutated when being applied
-	p.getOriginalPatchMap = func() (map[string]interface{}, error) {
-		patchMap := make(map[string]interface{})
-		if err := json.Unmarshal(p.patchJS, &patchMap); err != nil {
-			return nil, errors.NewBadRequest(err.Error())
-		}
-		return patchMap, nil
-	}
 
 	return objToUpdate, nil
 }
