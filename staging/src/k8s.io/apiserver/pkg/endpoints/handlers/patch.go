@@ -270,7 +270,7 @@ func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentRes
 
 	objToUpdate := p.restPatcher.New()
 
-	originalJS, patchedJS, err := patchObjectJSON(p.patchType, p.codec, currentObject, p.patchJS, objToUpdate, p.schemaReferenceObj)
+	originalJS, patchedJS, err := p.patchObjectJSON(currentObject, objToUpdate)
 	if err != nil {
 		return nil, interpretPatchError(err)
 	}
@@ -284,25 +284,20 @@ func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentRes
 // Currently it also returns the original and patched objects serialized to
 // JSONs (this may not be needed once we can apply patches at the
 // map[string]interface{} level).
-func patchObjectJSON(
-	patchType types.PatchType,
-	codec runtime.Codec,
-	originalObject runtime.Object,
-	patchJS []byte,
+func (p *jsonPatcher) patchObjectJSON(
+	unversionedOriginalObject runtime.Object,
 	objToUpdate runtime.Object,
-	schemaReferenceObj runtime.Object,
 ) (originalObjJS []byte, patchedObjJS []byte, retErr error) {
-	// originalObject is unversioned, but Encode will output versioned
-	// object in JSON.
-	js, err := runtime.Encode(codec, originalObject)
+	// Encode will convert & write a versioned object in JSON.
+	versionedJS, err := runtime.Encode(p.codec, unversionedOriginalObject)
 	if err != nil {
 		return nil, nil, err
 	}
-	originalObjJS = js
+	originalObjJS = versionedJS
 
-	switch patchType {
+	switch p.patchType {
 	case types.JSONPatchType:
-		patchObj, err := jsonpatch.DecodePatch(patchJS)
+		patchObj, err := jsonpatch.DecodePatch(p.patchJS)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -310,19 +305,14 @@ func patchObjectJSON(
 			return nil, nil, err
 		}
 	case types.MergePatchType:
-		if patchedObjJS, err = jsonpatch.MergePatch(originalObjJS, patchJS); err != nil {
-			return nil, nil, err
-		}
-	case types.StrategicMergePatchType:
-		panic("not reachable")
-		if patchedObjJS, err = strategicpatch.StrategicMergePatch(originalObjJS, patchJS, schemaReferenceObj); err != nil {
+		if patchedObjJS, err = jsonpatch.MergePatch(originalObjJS, p.patchJS); err != nil {
 			return nil, nil, err
 		}
 	default:
 		// only here as a safety net - go-restful filters content-type
-		return nil, nil, fmt.Errorf("unknown Content-Type header for patch: %v", patchType)
+		return nil, nil, fmt.Errorf("unknown Content-Type header for patch: %v", p.patchType)
 	}
-	if err := runtime.DecodeInto(codec, patchedObjJS, objToUpdate); err != nil {
+	if err := runtime.DecodeInto(p.codec, patchedObjJS, objToUpdate); err != nil {
 		return nil, nil, err
 	}
 	return
