@@ -280,79 +280,11 @@ func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentRes
 }
 
 func (p *jsonPatcher) subsequentPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
-	// on a conflict (which is the only reason to have more than one attempt),
-	// 1. build a strategic merge patch from originalJS and the patchedJS.  Different patch types can
-	//    be specified, but a strategic merge patch should be expressive enough handle them.  Build the
-	//    patch with this type to handle those cases.
-	// 2. build a strategic merge patch from originalJS and the currentJS
-	// 3. ensure no conflicts between the two patches
-	// 4. apply the #1 patch to the currentJS object
-
-	// Since the patch is applied on versioned objects, we need to convert the
-	// current object to versioned representation first.
-	currentVersionedObject, err := p.unsafeConvertor.ConvertToVersion(currentObject, p.kind.GroupVersion())
-	if err != nil {
-		return nil, err
-	}
-	currentObjMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(currentVersionedObject)
-	if err != nil {
-		return nil, err
-	}
-
-	currentPatchMap, err := p.computeStrategicMergePatch(currentObject, currentObjMap)
-	if err != nil {
-		return nil, err
-	}
-
-	// Get a fresh copy of the original strategic patch each time through, since applying it mutates the map
-	originalPatchMap, err := p.originalStrategicMergePatch()
-	if err != nil {
-		return nil, err
-	}
-
-	patchMetaFromStruct, err := strategicpatch.NewPatchMetaFromStruct(p.versionedObj)
-	if err != nil {
-		return nil, err
-	}
-	hasConflicts, err := strategicpatch.MergingMapsHaveConflicts(originalPatchMap, currentPatchMap, patchMetaFromStruct)
-	if err != nil {
-		return nil, err
-	}
-
-	if hasConflicts {
-		diff1, _ := json.Marshal(currentPatchMap)
-		diff2, _ := json.Marshal(originalPatchMap)
-		patchDiffErr := fmt.Errorf("there is a meaningful conflict (firstResourceVersion: %q, currentResourceVersion: %q):\n diff1=%v\n, diff2=%v\n", p.originalResourceVersion, currentResourceVersion, string(diff1), string(diff2))
-		glog.V(4).Infof("patchResource failed for resource %s, because there is a meaningful conflict(firstResourceVersion: %q, currentResourceVersion: %q):\n diff1=%v\n, diff2=%v\n", p.name, p.originalResourceVersion, currentResourceVersion, string(diff1), string(diff2))
-
-		// Return the last conflict error we got if we have one
-		if p.lastConflictErr != nil {
-			return nil, p.lastConflictErr
-		}
-		// Otherwise manufacture one of our own
-		return nil, errors.NewConflict(p.resource.GroupResource(), p.name, patchDiffErr)
-	}
-
-	versionedObjToUpdate, err := p.creater.New(p.kind)
-	if err != nil {
-		return nil, err
-	}
-	if err := applyPatchToObject(p.codec, p.defaulter, currentObjMap, originalPatchMap, versionedObjToUpdate, p.versionedObj); err != nil {
-		return nil, err
-	}
-	// Convert the object back to unversioned.
-	gvk := p.kind.GroupKind().WithVersion(runtime.APIVersionInternal)
-	objToUpdate, err := p.unsafeConvertor.ConvertToVersion(versionedObjToUpdate, gvk.GroupVersion())
-	if err != nil {
-		return nil, err
-	}
-
-	return objToUpdate, nil
+	return subsequentPatchLogic(p.patcher, p, currentObject, currentResourceVersion)
 }
 
 type smpPatcher struct {
 	*patcher
-
 	originalObjMap map[string]interface{}
 
 }
@@ -416,6 +348,15 @@ func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentReso
 }
 
 func (p *smpPatcher) subsequentPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
+	return subsequentPatchLogic(p.patcher, p, currentObject, currentResourceVersion)
+}
+
+type patchSource interface {
+	originalStrategicMergePatch() (map[string]interface{}, error)
+	computeStrategicMergePatch(unversionedObject runtime.Object, currentVersionedObjMap map[string]interface{}) (map[string]interface{}, error)
+}
+
+func subsequentPatchLogic(p *patcher, ps patchSource, currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
 	// on a conflict (which is the only reason to have more than one attempt),
 	// 1. build a strategic merge patch from originalJS and the patchedJS.  Different patch types can
 	//    be specified, but a strategic merge patch should be expressive enough handle them.  Build the
@@ -423,6 +364,12 @@ func (p *smpPatcher) subsequentPatchAttempt(currentObject runtime.Object, curren
 	// 2. build a strategic merge patch from originalJS and the currentJS
 	// 3. ensure no conflicts between the two patches
 	// 4. apply the #1 patch to the currentJS object
+	//
+	// TODO: Instead of computing two 2-way merges and comparing them for
+	// conflicts, we should do one 3-way merge, which can detect the same
+	// conflicts. This would likely be more readable and more efficient,
+	// and should be logically exactly the same operation.
+	//
 
 	// Since the patch is applied on versioned objects, we need to convert the
 	// current object to versioned representation first.
@@ -435,13 +382,13 @@ func (p *smpPatcher) subsequentPatchAttempt(currentObject runtime.Object, curren
 		return nil, err
 	}
 
-	currentPatchMap, err := p.computeStrategicMergePatch(currentObject, currentObjMap)
+	currentPatchMap, err := ps.computeStrategicMergePatch(currentObject, currentObjMap)
 	if err != nil {
 		return nil, err
 	}
 
 	// Get a fresh copy of the original strategic patch each time through, since applying it mutates the map
-	originalPatchMap, err := p.originalStrategicMergePatch()
+	originalPatchMap, err := ps.originalStrategicMergePatch()
 	if err != nil {
 		return nil, err
 	}
