@@ -279,6 +279,55 @@ func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentRes
 	return objToUpdate, nil
 }
 
+// patchObjectJSON patches the <originalObject> with <patchJS> and stores
+// the result in <objToUpdate>.
+// Currently it also returns the original and patched objects serialized to
+// JSONs (this may not be needed once we can apply patches at the
+// map[string]interface{} level).
+func patchObjectJSON(
+	patchType types.PatchType,
+	codec runtime.Codec,
+	originalObject runtime.Object,
+	patchJS []byte,
+	objToUpdate runtime.Object,
+	schemaReferenceObj runtime.Object,
+) (originalObjJS []byte, patchedObjJS []byte, retErr error) {
+	// originalObject is unversioned, but Encode will output versioned
+	// object in JSON.
+	js, err := runtime.Encode(codec, originalObject)
+	if err != nil {
+		return nil, nil, err
+	}
+	originalObjJS = js
+
+	switch patchType {
+	case types.JSONPatchType:
+		patchObj, err := jsonpatch.DecodePatch(patchJS)
+		if err != nil {
+			return nil, nil, err
+		}
+		if patchedObjJS, err = patchObj.Apply(originalObjJS); err != nil {
+			return nil, nil, err
+		}
+	case types.MergePatchType:
+		if patchedObjJS, err = jsonpatch.MergePatch(originalObjJS, patchJS); err != nil {
+			return nil, nil, err
+		}
+	case types.StrategicMergePatchType:
+		panic("not reachable")
+		if patchedObjJS, err = strategicpatch.StrategicMergePatch(originalObjJS, patchJS, schemaReferenceObj); err != nil {
+			return nil, nil, err
+		}
+	default:
+		// only here as a safety net - go-restful filters content-type
+		return nil, nil, fmt.Errorf("unknown Content-Type header for patch: %v", patchType)
+	}
+	if err := runtime.DecodeInto(codec, patchedObjJS, objToUpdate); err != nil {
+		return nil, nil, err
+	}
+	return
+}
+
 func (p *jsonPatcher) subsequentPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
 	return subsequentPatchLogic(p.patcher, p, currentObject, currentResourceVersion)
 }
@@ -498,55 +547,6 @@ func (p *patcher) patchResource(ctx request.Context) (runtime.Object, error) {
 	}
 	p.updatedObjectInfo = rest.DefaultUpdatedObjectInfo(nil, p.applyPatch, p.applyAdmission)
 	return finishRequest(p.timeout, p.requestLoop(ctx))
-}
-
-// patchObjectJSON patches the <originalObject> with <patchJS> and stores
-// the result in <objToUpdate>.
-// Currently it also returns the original and patched objects serialized to
-// JSONs (this may not be needed once we can apply patches at the
-// map[string]interface{} level).
-func patchObjectJSON(
-	patchType types.PatchType,
-	codec runtime.Codec,
-	originalObject runtime.Object,
-	patchJS []byte,
-	objToUpdate runtime.Object,
-	schemaReferenceObj runtime.Object,
-) (originalObjJS []byte, patchedObjJS []byte, retErr error) {
-	// originalObject is unversioned, but Encode will output versioned
-	// object in JSON.
-	js, err := runtime.Encode(codec, originalObject)
-	if err != nil {
-		return nil, nil, err
-	}
-	originalObjJS = js
-
-	switch patchType {
-	case types.JSONPatchType:
-		patchObj, err := jsonpatch.DecodePatch(patchJS)
-		if err != nil {
-			return nil, nil, err
-		}
-		if patchedObjJS, err = patchObj.Apply(originalObjJS); err != nil {
-			return nil, nil, err
-		}
-	case types.MergePatchType:
-		if patchedObjJS, err = jsonpatch.MergePatch(originalObjJS, patchJS); err != nil {
-			return nil, nil, err
-		}
-	case types.StrategicMergePatchType:
-		panic("not reachable")
-		if patchedObjJS, err = strategicpatch.StrategicMergePatch(originalObjJS, patchJS, schemaReferenceObj); err != nil {
-			return nil, nil, err
-		}
-	default:
-		// only here as a safety net - go-restful filters content-type
-		return nil, nil, fmt.Errorf("unknown Content-Type header for patch: %v", patchType)
-	}
-	if err := runtime.DecodeInto(codec, patchedObjJS, objToUpdate); err != nil {
-		return nil, nil, err
-	}
-	return
 }
 
 // strategicPatchObject applies a strategic merge patch of <patchJS> to
