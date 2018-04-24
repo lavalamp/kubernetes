@@ -85,10 +85,13 @@ func PatchResource(r rest.Patcher, scope RequestScope, admit admission.Interface
 		ctx := scope.ContextFunc(req)
 		ctx = request.WithNamespace(ctx, namespace)
 
-		// TODO: this is NOT using the scope's convertor [sic]. That seems
-		// like a potential extremely hard to find bug. Already some
-		// tests set this converter but apparently not the scope's
-		// unsafeConvertor.
+		// TODO: this is NOT using the scope's convertor [sic]. Figure
+		// out if this is intentional or not. Perhaps it matters on
+		// subresources? Rename this parameter if this is purposful and
+		// delete it (using scope.Convertor instead) otherwise.
+		//
+		// Already some tests set this converter but apparently not the
+		// scope's unsafeConvertor.
 		schemaReferenceObj, err := converter.ConvertToVersion(r.New(), scope.Kind.GroupVersion())
 		if err != nil {
 			scope.err(err, w, req)
@@ -175,6 +178,11 @@ func PatchResource(r rest.Patcher, scope RequestScope, admit admission.Interface
 
 type mutateObjectUpdateFunc func(obj, old runtime.Object) error
 
+// patcher breaks the process of patch application and retries into smaller
+// pieces of functionality.
+// TODO: Use builder pattern to construct this object?
+// TODO: As part of that effort, some aspects of PatchResource above could be
+// moved into this type.
 type patcher struct {
 	// Pieces of RequestScope
 	namer           ScopeNamer
@@ -204,17 +212,17 @@ type patcher struct {
 
 	trace *utiltrace.Trace
 
-	// Set at construction time and immutable
+	// Set at invocation-time (by applyPatch) and immutable thereafter
 	namespace         string
 	updatedObjectInfo rest.UpdatedObjectInfo
 	mechanism         patchMechanism
 
+	// Set on first iteration, currently only used to construct error messages
+	originalResourceVersion string
+
 	// Modified each iteration
 	iterationCount  int
 	lastConflictErr error
-
-	// Set on first iteration
-	originalResourceVersion string
 }
 
 func (p *patcher) toUnversioned(versionedObj runtime.Object) (runtime.Object, error) {
@@ -230,6 +238,7 @@ type patchMechanism interface {
 type jsonPatcher struct {
 	*patcher
 
+	// set by firstPatchAttempt
 	originalObjJS        []byte
 	originalPatchedObjJS []byte
 
@@ -238,20 +247,24 @@ type jsonPatcher struct {
 }
 
 func (p *jsonPatcher) firstPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
-	var err error
-
 	// Encode will convert & return a versioned object in JSON.
 	// Store this JS for future use.
-	p.originalObjJS, err = runtime.Encode(p.codec, currentObject)
+	originalObjJS, err := runtime.Encode(p.codec, currentObject)
 	if err != nil {
 		return nil, err
 	}
 
 	// Apply the patch. Store patched result for future use.
-	p.originalPatchedObjJS, err = p.applyJSPatch(p.originalObjJS)
+	originalPatchedObjJS, err := p.applyJSPatch(originalObjJS)
 	if err != nil {
 		return nil, interpretPatchError(err)
 	}
+
+	// Since both succeeded, store the results. (This shouldn't be
+	// necessary since neither of the above items can return conflict
+	// errors, but it also doesn't hurt.)
+	p.originalObjJS = originalObjJS
+	p.originalPatchedObjJS = originalPatchedObjJS
 
 	// Construct the resulting typed, unversioned object.
 	objToUpdate := p.restPatcher.New()
@@ -281,6 +294,9 @@ func (p *jsonPatcher) applyJSPatch(versionedJS []byte) (patchedJS []byte, retErr
 }
 
 func (p *jsonPatcher) subsequentPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
+	if len(p.originalObjJS) == 0 || len(p.originalPatchedObjJS) == 0 {
+		return nil, errors.NewInternalError(fmt.Errorf("unexpected error on patch retry: this indicates a bug in the server; remaking the patch against the most recent version of the object might succeed"))
+	}
 	return subsequentPatchLogic(p.patcher, p, currentObject, currentResourceVersion)
 }
 
@@ -307,6 +323,8 @@ func (p *jsonPatcher) originalStrategicMergePatch() (map[string]interface{}, err
 	return originalPatchMap, nil
 }
 
+// TODO: this will totally fail for CR types today, as no schema is available.
+// The interface should be changed.
 func (p *jsonPatcher) computeStrategicMergePatch(currentObject runtime.Object, _ map[string]interface{}) (map[string]interface{}, error) {
 	// Compute current patch.
 	currentObjJS, err := runtime.Encode(p.codec, currentObject)
@@ -351,10 +369,14 @@ func (p *smpPatcher) firstPatchAttempt(currentObject runtime.Object, currentReso
 		return nil, err
 	}
 	// Capture the original object map and patch for possible retries.
-	p.originalObjMap, err = runtime.DefaultUnstructuredConverter.ToUnstructured(currentVersionedObject)
+	originalObjMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(currentVersionedObject)
 	if err != nil {
 		return nil, err
 	}
+	// Store only after success. (This shouldn't be necessary since neither
+	// of the above items can return conflict errors, but it also doesn't
+	// hurt.)
+	p.originalObjMap = originalObjMap
 	if err := strategicPatchObject(p.codec, p.defaulter, currentVersionedObject, p.patchJS, versionedObjToUpdate, p.schemaReferenceObj); err != nil {
 		return nil, err
 	}
@@ -397,6 +419,9 @@ func strategicPatchObject(
 }
 
 func (p *smpPatcher) subsequentPatchAttempt(currentObject runtime.Object, currentResourceVersion string) (runtime.Object, error) {
+	if p.originalObjMap == nil {
+		return nil, errors.NewInternalError(fmt.Errorf("unexpected error on (SMP) patch retry: this indicates a bug in the server; remaking the patch against the most recent version of the object might succeed"))
+	}
 	return subsequentPatchLogic(p.patcher, p, currentObject, currentResourceVersion)
 }
 
@@ -412,7 +437,11 @@ func (p *smpPatcher) originalStrategicMergePatch() (map[string]interface{}, erro
 }
 
 func (p *smpPatcher) computeStrategicMergePatch(_ runtime.Object, currentObjMap map[string]interface{}) (map[string]interface{}, error) {
-	return strategicpatch.CreateTwoWayMergeMapPatch(p.originalObjMap, currentObjMap, p.schemaReferenceObj)
+	o, err := strategicpatch.CreateTwoWayMergeMapPatch(p.originalObjMap, currentObjMap, p.schemaReferenceObj)
+	if err != nil {
+		return nil, interpretPatchError(err)
+	}
+	return o, nil
 }
 
 // patchSource lets you get two SMPs, an original and a current. These can be
