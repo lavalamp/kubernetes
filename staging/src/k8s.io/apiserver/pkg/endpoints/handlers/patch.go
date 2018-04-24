@@ -43,13 +43,6 @@ import (
 )
 
 // PatchResource returns a function that will handle a resource patch.
-//
-// Note that most k8s api operations treat RV as a precondition. PATCH has an
-// additional optimization: if RV differs but we can predict an equivalent
-// patch for the current revision, we don't make the client send a new patch.
-// This keeps the retry loop in the server, which saves the time of network
-// transfer for retrys, hopefully making losing the race repeatedly more rare,
-// therefore hopefully reducing the total number of conflicts.
 func PatchResource(r rest.Patcher, scope RequestScope, admit admission.Interface, converter runtime.ObjectConvertor, patchTypes []string) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		// For performance tracking purposes.
