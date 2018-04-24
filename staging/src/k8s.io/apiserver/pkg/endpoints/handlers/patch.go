@@ -42,8 +42,14 @@ import (
 	utiltrace "k8s.io/apiserver/pkg/util/trace"
 )
 
-// PatchResource returns a function that will handle a resource patch
-// TODO: Eventually PatchResource should just use GuaranteedUpdate and this routine should be a bit cleaner
+// PatchResource returns a function that will handle a resource patch.
+//
+// Note that most k8s api operations treat RV as a precondition. PATCH has an
+// additional optimization: if RV differs but we can predict an equivalent
+// patch for the current revision, we don't make the client send a new patch.
+// This keeps the retry loop in the server, which saves the time of network
+// transfer for retrys, hopefully making losing the race repeatedly more rare,
+// therefore hopefully reducing the total number of conflicts.
 func PatchResource(r rest.Patcher, scope RequestScope, admit admission.Interface, converter runtime.ObjectConvertor, patchTypes []string) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		// For performance tracking purposes.
@@ -411,6 +417,16 @@ func (p *smpPatcher) computeStrategicMergePatch(_ runtime.Object, currentObjMap 
 
 // patchSource lets you get two SMPs, an original and a current. These can be
 // compared for conflicts.
+//
+// TODO: Instead of computing two 2-way merges and comparing them for
+// conflicts, we could do one 3-way merge, which can detect the same
+// conflicts. This would likely be more readable and more efficient,
+// and should be logically exactly the same operation.
+//
+// TODO: Currently, the user gets this behavior whether or not they
+// specified a RV. I believe we can stop doing this if the user did not
+// specify an RV, and that would not be a breaking change.
+//
 type patchSource interface {
 	// originalStrategicMergePatch must reconstruct this map each time,
 	// because it is consumed when it is used.
@@ -426,11 +442,6 @@ func subsequentPatchLogic(p *patcher, ps patchSource, currentObject runtime.Obje
 	// 2. build a strategic merge patch from originalJS and the currentJS
 	// 3. ensure no conflicts between the two patches
 	// 4. apply the #1 patch to the currentJS object
-	//
-	// TODO: Instead of computing two 2-way merges and comparing them for
-	// conflicts, we should do one 3-way merge, which can detect the same
-	// conflicts. This would likely be more readable and more efficient,
-	// and should be logically exactly the same operation.
 
 	// Since the patch is applied on versioned objects, we need to convert the
 	// current object to versioned representation first.
