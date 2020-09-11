@@ -324,7 +324,7 @@ func NewMasterConfigWithOptions(opts *MasterConfigOptions) *controlplane.Config 
 			StorageFactory:          storageFactory,
 			KubeletClientConfig:     kubeletclient.KubeletClientConfig{Port: 10250},
 			APIServerServicePort:    443,
-			MasterCount:             1,
+			InstanceCount:           1,
 		},
 	}
 }

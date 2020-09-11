@@ -158,8 +158,8 @@ func validateAPIPriorityAndFairness(options *ServerRunOptions) []error {
 // Validate checks ServerRunOptions and return a slice of found errs.
 func (s *ServerRunOptions) Validate() []error {
 	var errs []error
-	if s.MasterCount <= 0 {
-		errs = append(errs, fmt.Errorf("--apiserver-count should be a positive number, but value '%d' provided", s.MasterCount))
+	if s.InstanceCount <= 0 {
+		errs = append(errs, fmt.Errorf("--apiserver-count should be a positive number, but value '%d' provided", s.InstanceCount))
 	}
 	errs = append(errs, s.Etcd.Validate()...)
 	errs = append(errs, validateClusterIPFlags(s)...)

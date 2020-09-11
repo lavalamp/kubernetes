@@ -76,7 +76,7 @@ type ServerRunOptions struct {
 
 	EnableAggregatorRouting bool
 
-	MasterCount            int
+	InstanceCount          int
 	EndpointReconcilerType string
 
 	ServiceAccountSigningKeyFile     string
@@ -106,7 +106,7 @@ func NewServerRunOptions() *ServerRunOptions {
 
 		EnableLogsHandler:      true,
 		EventTTL:               1 * time.Hour,
-		MasterCount:            1,
+		InstanceCount:          1,
 		EndpointReconcilerType: string(reconcilers.LeaseEndpointReconcilerType),
 		KubeletConfig: kubeletclient.KubeletClientConfig{
 			Port:         ports.KubeletPort,
@@ -180,7 +180,7 @@ func (s *ServerRunOptions) Flags() (fss cliflag.NamedFlagSets) {
 		"If non-zero, throttle each user connection to this number of bytes/sec. "+
 		"Currently only applies to long-running requests.")
 
-	fs.IntVar(&s.MasterCount, "apiserver-count", s.MasterCount,
+	fs.IntVar(&s.InstanceCount, "apiserver-count", s.InstanceCount,
 		"The number of apiservers running in the cluster, must be a positive number. (In use when --endpoint-reconciler-type=master-count is enabled.)")
 
 	fs.StringVar(&s.EndpointReconcilerType, "endpoint-reconciler-type", string(s.EndpointReconcilerType),

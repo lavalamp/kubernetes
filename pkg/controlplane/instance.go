@@ -175,7 +175,7 @@ type ExtraConfig struct {
 
 	// Number of masters running; all masters must be started with the
 	// same value for this field. (Numbers > 1 currently untested.)
-	MasterCount int
+	InstanceCount int
 
 	// MasterEndpointReconcileTTL sets the time to live in seconds of an
 	// endpoint record recorded by each master. The endpoints are checked at an
@@ -240,7 +240,7 @@ func (c *Config) createMasterCountReconciler() reconcilers.EndpointReconciler {
 	}
 	endpointsAdapter := reconcilers.NewEndpointsAdapter(endpointClient, endpointSliceClient)
 
-	return reconcilers.NewMasterCountEndpointReconciler(c.ExtraConfig.MasterCount, endpointsAdapter)
+	return reconcilers.NewMasterCountEndpointReconciler(c.ExtraConfig.InstanceCount, endpointsAdapter)
 }
 
 func (c *Config) createNoneReconciler() reconcilers.EndpointReconciler {
